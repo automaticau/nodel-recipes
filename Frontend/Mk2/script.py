@@ -19,8 +19,8 @@ To switch to your Frontend / Dashboard, use the **Nav** / **UI** menu or use `/i
 
 _changelog_
  
- * rev. 4: improved support for multiple actions, e.g. `<button action='Action1, Action2, Action3'>` instead of the inline-JSON method `<button action='["Action1","Action2","Action3"]'>` (avoid!)
- * todo: simple boolean combining of events
+ * rev. 5: improved support for multiple actions, e.g. `<button action='Action1, Action2, Action3'>` instead of the inline-JSON method `<button action='["Action1","Action2","Action3"]'>` (avoid!)
+ * rev. 6: support for signal combining using AND boolean logic incl. negation using "NOT" as prefix
 '''
 
 import xml.etree.ElementTree as ET # XML parsing
@@ -120,31 +120,41 @@ def loadIndexFile(xmlFile):
     # the default schema to use if '_action' or '_signal' is not used
     defaultSchema = schemaMap.get(eType)
 
-    def tryAction(eAction):
-      if eAction != None and lookup_local_action(eAction) == None:
-        # an action is specified
-        
-        # is it local only?
-        if SimpleName(eAction) in localOnlyActions:
-          handler = lambda arg: None
-          
-        else:
-          remoteAction = create_remote_action(eAction, suggestedNode=param_suggestedNode)
-          handler = lambda arg: remoteAction.call(arg)
-        
-        action = Action(eAction, handler, 
-                        {'group': thisGroup, 'order': next_seq(), 'schema': schemaMap.get('%s_action' % eType, defaultSchema)})
-        
-        return action
-
-    
-    def tryMultiAction(aName):
+    def tryAction(aName):
       if is_blank(aName):
         return
 
-      aParts = [ s.strip() for s in aName.split(',') if not is_blank(s) ]
+      existing = lookup_local_action(aName)
+      if existing:
+        return existing
+      
+      # a new action is specified
+        
+      # is it local only?
+      if SimpleName(aName) in localOnlyActions:
+        handler = lambda arg: None
+        
+      else:
+        remoteAction = create_remote_action(aName, suggestedNode=param_suggestedNode)
+        handler = lambda arg: remoteAction.call(arg)
+      
+      action = Action(aName, handler, 
+                      { 'title': aName, 'group': thisGroup, 'order': next_seq(), 'schema': schemaMap.get('%s_action' % eType, defaultSchema)})
+      
+      return action
 
-      if len(aParts) <= 0:
+    
+    def tryMultiAction(aNames):
+      if is_blank(aNames):
+        return False
+
+      if lookup_local_action(aNames):
+        # already exists, no need to create
+        return True
+
+      aParts = [ s.strip() for s in aNames.split(',') if not is_blank(s) ]
+
+      if len(aParts) <= 1:
         return False
 
       # has multiple actions
@@ -160,16 +170,11 @@ def loadIndexFile(xmlFile):
         for a in actionsList:
           a.call(arg) # all use the same arg
 
-      existing = lookup_local_action(aName)
-      if existing:
-        # already exists, not need to create
-        return existing
-      
-      multiAction = Action(aName, handler, 
-        { 'title': aName, 'group': thisGroup, 'order': next_seq(), 'schema': schemaMap.get('%s_action' % eType, defaultSchema) })
+      Action(aNames, handler, 
+        { 'title': aNames, 'group': thisGroup, 'order': next_seq(), 'schema': schemaMap.get('%s_action' % eType, defaultSchema) })
 
-      return multiAction
-      
+      return True
+
     # for "normal" actions check if multiple actions specified by comma separation
     if tryMultiAction(eActionNormal):
       pass # had a result meaning a multi action was dealt with
@@ -182,18 +187,72 @@ def loadIndexFile(xmlFile):
     tryAction(eActionOn)
     tryAction(eActionOff)
 
-    if eEvent != None and lookup_local_event(eEvent) == None:
+    # event / signals
+
+    def tryEvent(eName):
+      if is_blank(eName):
+        return False
+
+      negate = eName.startswith('NOT')
+      if negate:
+        eName = eName[3:] # drop the NOT
+
+      existing = lookup_local_event(eName)
+      if existing:
+        return existing
+
       # an event is specified
-      
-      event = Event(eEvent, 
+
+      event = Event(eName, 
                     {'group': thisGroup, 'order': next_seq(), 'schema': schemaMap.get('%s_signal' % eType, defaultSchema)})
       
       # is it local only?
-      if not SimpleName(eEvent) in localOnlySignals:
+      if not SimpleName(eName) in localOnlySignals:
         def remoteEventHandler(arg=None):
-          event.emit(arg)
+          event.emit(not arg if negate else arg)
       
-        remoteEvent = create_remote_event(eEvent, remoteEventHandler, suggestedNode=param_suggestedNode)
+        remoteEvent = create_remote_event(eName, remoteEventHandler, suggestedNode=param_suggestedNode)
+      
+      return event
+
+    def tryMultiEvent(eNames):
+      if is_blank(eNames):
+        return
+
+      negate = eNames.startswith('NOT')
+      if negate:
+        eNames = eNames[3:] # drop the NOT
+
+      if lookup_local_event(eNames):
+        # already exists, no need to create
+        return True
+
+      eParts = [ s.strip() for s in eNames.split(',') if not is_blank(s) ]
+
+      if len(eParts) <= 1:
+        return False
+
+      # has multiple actions
+
+      eventsList = []
+
+      multiEvent = Event(eNames, {'title': eNames, 'group': thisGroup, 'order': next_seq(), 'schema': { 'type': 'boolean' }})
+
+      def multi_handler(arg):
+        result = all([ e.getArg() for e in eventsList ])  # combine them using AND i.e. 'all' Python function, 
+        multiEvent.emit(not result if negate else result) # negating if necessary
+      
+      for ePart in eParts:
+        # create discrete ones
+        e = tryEvent(ePart)
+        e.addEmitHandler(multi_handler)
+        eventsList.append(e)
+
+    if tryMultiEvent(eEvent):
+      pass
+
+    else:
+      tryEvent(eEvent)
     
     for i in e:
       explore(thisGroup, i)
