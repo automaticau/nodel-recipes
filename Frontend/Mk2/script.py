@@ -1,5 +1,5 @@
 '''
-_(requires Nodel v2.2 or higher; recipe Mk 2 rev. 3)_
+_(recipe Mk 2 rev. 4, requires Nodel v2.2 or higher)_
 
 To get started from scratch, use the **Create Frontend from sample** Action.
 
@@ -16,7 +16,11 @@ This **Frontend** / **Dashboard** makes use of the following files:
 You can **drag & drop** content into the editor for convenience, including certain binary files (e.g. graphics, etc.).
 
 To switch to your Frontend / Dashboard, use the **Nav** / **UI** menu or use `/index.xml` URL suffix for node.
+
+_changelog_
  
+ * rev. 4: improved support for multiple actions, e.g. `<button action='Action1, Action2, Action3'>` instead of the inline-JSON method `<button action='["Action1","Action2","Action3"]'>` (avoid!)
+ * todo: simple boolean combining of events
 '''
 
 import xml.etree.ElementTree as ET # XML parsing
@@ -80,7 +84,7 @@ def loadSchemas(json):
     keys.append(key)
     
   if len(keys) > 0:
-    print 'Loaded schemas: %s' % ', '.join(keys)
+    console.info('Loaded schemas: %s' % ', '.join(keys))
 
   else:
     console.warn('(no schema mapping info was present)')
@@ -130,8 +134,51 @@ def loadIndexFile(xmlFile):
         
         action = Action(eAction, handler, 
                         {'group': thisGroup, 'order': next_seq(), 'schema': schemaMap.get('%s_action' % eType, defaultSchema)})
+        
+        return action
+
+    
+    def tryMultiAction(aName):
+      if is_blank(aName):
+        return
+
+      aParts = [ s.strip() for s in aName.split(',') if not is_blank(s) ]
+
+      if len(aParts) <= 0:
+        return False
+
+      # has multiple actions
+
+      actionsList = []
+      for aPart in aParts:
+        # create discrete ones
+        actionsList.append(tryAction(aPart))
+
+      # create the handler to fire them all
       
-    tryAction(eActionNormal)
+      def handler(arg):
+        for a in actionsList:
+          a.call(arg) # all use the same arg
+
+      existing = lookup_local_action(aName)
+      if existing:
+        # already exists, not need to create
+        return existing
+      
+      multiAction = Action(aName, handler, 
+        { 'title': aName, 'group': thisGroup, 'order': next_seq(), 'schema': schemaMap.get('%s_action' % eType, defaultSchema) })
+
+      return multiAction
+      
+    # for "normal" actions check if multiple actions specified by comma separation
+    if tryMultiAction(eActionNormal):
+      pass # had a result meaning a multi action was dealt with
+      
+    else:
+      # represents a single action
+      tryAction(eActionNormal)
+    
+    # momentary actions
     tryAction(eActionOn)
     tryAction(eActionOff)
 
@@ -152,9 +199,7 @@ def loadIndexFile(xmlFile):
       explore(thisGroup, i)
   
   explore('', xml.getroot())
-  
 
-Nodel.getHostPath()
 
 @local_action({'title': 'Create Frontend from sample and restart (will not overwrite existing)' })
 def CreateFromSample():
