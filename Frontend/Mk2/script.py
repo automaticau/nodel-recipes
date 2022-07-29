@@ -1,5 +1,5 @@
 '''
-_(recipe Mk 2 rev. 4, requires Nodel v2.2 or higher)_
+_(recipe Mk 2 rev. 8, requires Nodel v2.2 or higher)_
 
 To get started from scratch, use the **Create Frontend from sample** Action.
 
@@ -18,9 +18,11 @@ You can **drag & drop** content into the editor for convenience, including certa
 To switch to your Frontend / Dashboard, use the **Nav** / **UI** menu or use `/index.xml` URL suffix for node.
 
 _changelog_
- 
+
+ * rev. 8: EXPERIMENTAL: inline discrete arguments action and event combining, e.g. `<button join='PowerA:On, PowerB:Off, PowerC:On'>`
+ * rev. 6: support for signal combining using AND boolean logic
+ * rev. 6: EXPERIMENTAL: negation using "NOT" as prefix
  * rev. 5: improved support for multiple actions, e.g. `<button action='Action1, Action2, Action3'>` instead of the inline-JSON method `<button action='["Action1","Action2","Action3"]'>` (avoid!)
- * rev. 6: support for signal combining using AND boolean logic incl. negation using "NOT" as prefix
 '''
 
 import xml.etree.ElementTree as ET # XML parsing
@@ -124,6 +126,15 @@ def loadIndexFile(xmlFile):
       if is_blank(aName):
         return
 
+      plainName = aName
+
+      # aName might be 'Display1 Power' or 'Display1 Power:On'
+      argProvided = None
+      indexOfColon = aName.find(':')
+      if indexOfColon > 0:
+        argProvided = aName[indexOfColon+1:]
+        plainName = aName[:indexOfColon] # for plain name, strip out the arg part
+
       existing = lookup_local_action(aName)
       if existing:
         return existing
@@ -135,8 +146,10 @@ def loadIndexFile(xmlFile):
         handler = lambda arg: None
         
       else:
-        remoteAction = create_remote_action(aName, suggestedNode=param_suggestedNode)
-        handler = lambda arg: remoteAction.call(arg)
+        remoteAction = lookup_remote_action(plainName)
+        if not remoteAction:
+            remoteAction = create_remote_action(plainName, suggestedNode=param_suggestedNode)
+        handler = lambda arg: remoteAction.call(argProvided if argProvided != None else arg)
       
       action = Action(aName, handler, 
                       { 'title': aName, 'group': thisGroup, 'order': next_seq(), 'schema': schemaMap.get('%s_action' % eType, defaultSchema)})
@@ -193,6 +206,16 @@ def loadIndexFile(xmlFile):
       if is_blank(eName):
         return False
 
+      plainName = eName
+
+      # eName might be 'Display1 Power' or 'Display1 Power:On'
+      argProvided = None
+      indexOfColon = eName.find(':')
+      if indexOfColon > 0:
+        argProvided = eName[indexOfColon+1:]
+        plainName = eName[:indexOfColon] # for plain name, strip out the arg part
+        
+      # EXPERIMENTAL
       negate = eName.startswith('NOT')
       if negate:
         eName = eName[3:] # drop the NOT
@@ -208,10 +231,18 @@ def loadIndexFile(xmlFile):
       
       # is it local only?
       if not SimpleName(eName) in localOnlySignals:
-        def remoteEventHandler(arg=None):
-          event.emit(not arg if negate else arg)
+
+        def remoteEventHandler(rawArg=None):
+          if argProvided != None:
+            result = rawArg == argProvided
+          else:
+            result = rawArg
+
+          event.emit(not result if negate else result)
       
-        remoteEvent = create_remote_event(eName, remoteEventHandler, suggestedNode=param_suggestedNode)
+        remoteEvent = lookup_remote_event(plainName)
+        if not remoteEvent:
+          remoteEvent = create_remote_event(plainName, remoteEventHandler, suggestedNode=param_suggestedNode)
       
       return event
 
@@ -219,6 +250,7 @@ def loadIndexFile(xmlFile):
       if is_blank(eNames):
         return
 
+      # EXPERIMENTAL
       negate = eNames.startswith('NOT')
       if negate:
         eNames = eNames[3:] # drop the NOT
