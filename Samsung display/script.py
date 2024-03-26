@@ -1,9 +1,12 @@
 '''
 **Samsung display** recipe, serial or TCP.
 
+`REV 11.240326`
+
 Remember to adjust **Network Standby Control** to **On**.
 
-* rev. ~10+:
+* rev 11: "treat no signal as fault"
+* rev. 10:
   * new: IP address config via remote binding (see AMX Beacon, SSDP address, or custom address provider recipes)
   * reliability: flipping Power and/or Input rapidly may settle on wrong state
   * deprecated Mute; added MuteOnOff to better match conventional On & Off action and signal argument usage
@@ -17,6 +20,9 @@ param_port = Parameter({"title": "TCP port", "order":0, "schema": {"type": "inte
 param_id = Parameter({"title": "Set ID", "order": 0, "schema": {"type":"integer", 'hint': 0}})
 
 param_mainInputCode = Parameter({'title': 'Main Input Code', 'desc': 'The input (source) for the "ensure" actions and events', 'schema': {'type': 'string'}})
+
+param_treatNoSignalAsFault = Parameter({ 'title': 'Treat "No Signal" as fault?', 'desc': 'Raise a fault/error instead of warning if the display is On and it detects "No Signal"', 
+                                         'schema': { 'type': 'boolean' }})
 
 # general device status
 local_event_Status = LocalEvent({'order': -100, 'group': 'Status', 'schema': {'type': 'object', 'properties': {
@@ -691,57 +697,33 @@ def remote_event_LandingStatus(arg):
 
 # roughly, the last contact  
 local_event_LastContactDetect = LocalEvent({'group': 'Status', 'title': 'Last contact detect', 'schema': {'type': 'string'}})
+
+local_event_LastSignalPresentDetect = LocalEvent({'group': 'Status', 'title': 'Last signal was present and power on', 'schema': {'type': 'string '}})
   
 def statusCheck():
-  diff = (system_clock() - lastReceive[0])/1000.0 # (in secs)
+  clockNow = system_clock()
+  diff = (clockNow - lastReceive[0])/1000.0 # (in secs)
   now = date_now()
   
   if diff > status_check_interval+15:
     previousContactValue = local_event_LastContactDetect.getArg()
-    
-    if previousContactValue == None:
-      message = 'Always been missing.'
-      
-    else:
-      previousContact = date_parse(previousContactValue)
-      roughDiff = (now.getMillis() - previousContact.getMillis())/1000/60
-      if roughDiff < 60:
-        message = 'Off the network for approx. %s mins' % roughDiff
-      elif roughDiff < (60*24):
-        message = 'Off the network since %s' % previousContact.toString('h:mm:ss a')
-      else:
-        message = 'Off the network since %s' % previousContact.toString('h:mm:ss a, E d-MMM')      
-      
-    local_event_Status.emit({'level': 2, 'message': message})
+    local_event_Status.emit({'level': 2, 'message': 'Off the network %s' % formatPeriod(now, local_event_LastContactDetect.getArg()) })
     return
     
   # it may be contactable on the network, but is it checking in (landing) (if configured to do so i.e. binding is set)
   
-  diff = (system_clock() - lastLanded[0])/1000.0
+  diff = (clockNow - lastLanded[0])/1000.0
   
   if lookup_remote_event('LandingStatus') != None and diff > 5*60: # arbitrary 5 mins
-    previousContactValue = (local_event_LandingStatus.getArg() or {}).get('lastLanded')
-    
-    if previousContactValue == None:
-      message = 'Never "landed"'
-      
-    else:
-      previousContact = date_parse(previousContactValue)
-      roughDiff = (now.getMillis() - previousContact.getMillis())/1000/60
-      if roughDiff < 60:
-        message = 'Last landing was approx. %s mins ago' % roughDiff
-      elif roughDiff < (60*24):
-        message = 'No landing since %s' % previousContact.toString('h:mm:ss a')
-      else:
-        message = 'No landing since %s' % previousContact.toString('h:mm:ss a, E d-MMM')      
-      
-    local_event_Status.emit({'level': 2, 'message': message})
+    local_event_Status.emit({'level': 2, 'message': "No landing %s" %  formatPeriod(now, (local_event_LandingStatus.getArg() or {}).get('lastLanded')) })
     return
   
   # issue warning if check if there's a video-sync issue (only when the power is on)
   if local_event_ErrorStatusNoSync.getArg() and lookup_local_event('Power').getArg() == 'On':
-    local_event_Status.emit({'level': 1, 'message': 'Display is on but no video signal detected'})
+    local_event_Status.emit({'level': 2 if param_treatNoSignalAsFault else 1, 'message': 'Display is on but no video signal detected %s' % formatPeriod(now, local_event_LastSignalPresentDetect.getArg())})
     return
+  
+  local_event_LastSignalPresentDetect.emit(str(now))
 
   # use a different warning for any of the other error status flags
   errorFlags = list()
@@ -765,6 +747,18 @@ def statusCheck():
 
 status_check_interval = 75
 status_timer = Timer(statusCheck, status_check_interval)
+
+def formatPeriod(now, dateStr, asInstant=False):
+  if dateStr == None:       return 'for unknown period'
+  dateObj = date_parse(dateStr)
+
+  diff = (now.getMillis() - dateObj.getMillis()) / 1000 / 60 # in mins
+  
+  if diff < 0:              return 'never ever'
+  elif diff == 0:           return 'for <1 min' if not asInstant else '<1 min ago'
+  elif diff < 60:           return ('for <%s mins' if not asInstant else '<%s mins ago') % diff
+  elif diff < 60*24:        return ('since %s' if not asInstant else 'at %s') % dateObj.toString('h:mm:ss a')
+  else:                     return ('since %s' if not asInstant else 'on %s') % dateObj.toString('E d-MMM h:mm:ss a')
     
 # <!-- logging
 
