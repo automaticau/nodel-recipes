@@ -1,10 +1,12 @@
 '''
 **Samsung display** recipe, serial or TCP.
 
+`rev 11.231220`
+
 Remember to adjust **Network Standby Control** to **On**.
 
-* rev. ~10+:
-  * new: IP address config via remote binding (see AMX Beacon, SSDP address, or custom address provider recipes)
+  * r11: BUGFIX random faults sometimes incorrectly generated on old displays when Powered Off (e.g. Lamp Fault)
+  * IP address config via remote binding (see AMX Beacon, SSDP address, or custom address provider recipes)
   * reliability: flipping Power and/or Input rapidly may settle on wrong state
   * deprecated Mute; added MuteOnOff to better match conventional On & Off action and signal argument usage
   * added discrete Power and Mute states PowerOn, PowerOff, MuteOn and MuteOff
@@ -388,7 +390,8 @@ def getDisplayStatus():
   checksum = sum([ord(c) for c in msg]) & 0xff
   
   def handleResp(arg):
-    checkHeader(arg)
+    if not checkHeader(arg):
+      return 
     
     local_event_RawPower.emit('On' if ord(arg[6]) == 1 else 'Off')
     
@@ -432,7 +435,8 @@ def getExtendedDisplayStatus():
   checksum = sum([ord(c) for c in msg]) & 0xff
   
   def handleResp(arg):
-    checkHeader(arg)
+    if not checkHeader(arg):
+      return
     
     local_event_ErrorStatusLamp.emit(arg[6] == '\x01')
     local_event_ErrorStatusTemp.emit(arg[7] == '\x01')
@@ -666,11 +670,14 @@ def checkHeader(arg, onSuccess=None):
   if arg[4] != 'A':
     if local_event_Power.getArg() != 'On':
       log(2, 'Bad acknowledgement - may be expected because power is Off')
+      return False # used for non-serious condition
     else:
       raise Exception('Bad acknowledgement')
     
   if onSuccess:
     onSuccess()
+    
+  return True
     
 # for status checks
 
